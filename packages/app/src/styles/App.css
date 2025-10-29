@@ -1,0 +1,66 @@
+.app-container {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-main {
+  flex: 1;
+  padding: var(--spacing-md);
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: var(--spacing-xl);
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+  align-items: start;  /* Align both columns to top */
+}
+
+.controls-section {
+  position: sticky;
+  top: var(--spacing-md);  /* Stick closer to top */
+  height: fit-content;
+  max-height: calc(100vh - var(--spacing-md) * 2);  /* Prevent overflow */
+  overflow-y: auto;  /* Allow scrolling if controls get too tall */
+}
+
+.viewer-section {
+  min-height: 600px;
+}
+
+.loading-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 600px;
+  background: var(--surface);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.loading-placeholder p {
+  color: var(--text-secondary);
+  font-size: 1.125rem;
+}
+
+/* Responsive design */
+@media (max-width: 1024px) {
+  .app-main {
+    grid-template-columns: 1fr;
+  }
+  
+  .controls-section {
+    position: static;
+  }
+}
+
+@media print {
+  .app-container {
+    display: block;
+  }
+  
+  .app-main {
+    display: block;
+    padding: 0;
+  }
+}

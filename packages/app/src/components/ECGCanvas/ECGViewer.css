@@ -1,0 +1,148 @@
+.ecg-viewer {
+  padding: var(--spacing-lg);
+  position: relative;
+  background: var(--surface);
+  border-radius: 8px;
+}
+
+.ecg-viewer.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  color: var(--text-secondary);
+}
+
+/* Canvas container for layering grid and trace */
+.ecg-canvas-container {
+  position: relative;
+  overflow: hidden;
+  background: var(--ecg-background);
+  width: 100%;
+  height: 100%;
+}
+
+/* Lead label styling */
+.ecg-lead-label {
+  position: absolute;
+  top: 3px;
+  left: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  z-index: 10;
+  background: rgba(255, 255, 255, 0.95);
+  padding: 3px 8px;
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* Rhythm strip label needs more vertical space and stronger background */
+.ecg-rhythm-strip .ecg-lead-label {
+  top: 4px;
+  padding: 5px 12px;
+  background: rgba(255, 255, 255, 0.98);  /* More opaque to stand out over grid */
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);  /* Stronger shadow */
+}
+
+.ecg-tech-info {
+  font-size: 9px;
+  font-weight: 400;
+  color: #666;
+}
+
+
+/* 12-lead layout */
+.ecg-12-lead-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.ecg-12-lead-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: var(--spacing-sm);
+}
+
+.ecg-lead-box {
+  position: relative;
+  border: 1px solid #e0e0e0;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--ecg-background);
+  aspect-ratio: 1.5 / 1;  /* Maintain aspect ratio for 4 column layout */
+}
+
+/* Rhythm strip */
+.ecg-rhythm-strip {
+  position: relative;
+  border: 1px solid #e0e0e0;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--ecg-background);
+  height: 180px;
+}
+
+/* In 12-lead view, add margin */
+.ecg-12-lead-container .ecg-rhythm-strip {
+  margin-top: var(--spacing-md);
+}
+
+/* Standalone rhythm views should be taller */
+.ecg-viewer > .ecg-rhythm-strip {
+  height: 400px;
+}
+
+/* Calibration pulse */
+.ecg-calibration {
+  position: absolute;
+  bottom: var(--spacing-md);
+  right: var(--spacing-md);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.ecg-calibration-canvas {
+  border: 1px solid var(--border);
+  background: var(--ecg-background);
+}
+
+/* Print-specific adjustments */
+@media print {
+  .ecg-viewer {
+    padding: 0;
+    box-shadow: none;
+    border: none;
+    page-break-inside: avoid;
+  }
+  
+  .ecg-lead-box,
+  .ecg-rhythm-strip,
+  .ecg-rhythm-container,
+  .ecg-single-lead-container {
+    border: 0.5pt solid #000;
+    page-break-inside: avoid;
+  }
+  
+  .ecg-lead-label {
+    font-size: 8pt;
+    background: white;
+  }
+  
+  .ecg-12-lead-grid {
+    gap: 2mm;
+  }
+  
+  /* Ensure exact dimensions for print */
+  .ecg-canvas-container canvas {
+    width: auto !important;
+    height: auto !important;
+  }
+}

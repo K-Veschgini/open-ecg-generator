@@ -1,0 +1,28 @@
+{
+  "name": "@open-ecg-generator/core",
+  "version": "1.0.0",
+  "description": "Core ECG generation library using ECGSYN algorithm with adaptive RK45 solver",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.2.0"
+  },
+  "files": [
+    "dist",
+    "src"
+  ]
+}

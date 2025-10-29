@@ -1,0 +1,36 @@
+{
+  "name": "open-ecg-generator",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Professional ECG generation and visualization platform",
+  "scripts": {
+    "dev": "npm run dev --workspace=@open-ecg-generator/app",
+    "build": "npm run build --workspaces",
+    "build:core": "npm run build --workspace=@open-ecg-generator/core",
+    "build:app": "npm run build --workspace=@open-ecg-generator/app",
+    "preview": "npm run preview --workspace=@open-ecg-generator/app",
+    "clean": "npm run clean --workspaces"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.2.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "ecg",
+    "electrocardiogram",
+    "medical",
+    "simulation",
+    "ecgsyn",
+    "cardiology",
+    "education"
+  ],
+  "author": "",
+  "license": "MIT"
+}

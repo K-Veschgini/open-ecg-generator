@@ -1,0 +1,8 @@
+.ecg-grid-canvas {
+  display: block;
+  image-rendering: crisp-edges;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+}

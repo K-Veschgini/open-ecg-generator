@@ -1,0 +1,175 @@
+/* Print View Styles */
+.print-view {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: white;
+  z-index: 9999;
+  overflow: auto;
+}
+
+.print-page {
+  width: 210mm;
+  height: 297mm;
+  margin: 0 auto;
+  padding: 10mm;
+  background: white;
+  box-sizing: border-box;
+  position: relative;
+}
+
+/* Header Section */
+.print-header {
+  margin-bottom: 5mm;
+  border-bottom: 0.5pt solid #000;
+  padding-bottom: 3mm;
+}
+
+.header-info {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10mm;
+  font-size: 9pt;
+}
+
+.info-row {
+  display: flex;
+  margin-bottom: 1mm;
+}
+
+.info-row .label {
+  font-weight: 600;
+  margin-right: 2mm;
+}
+
+.info-row .value {
+  flex: 1;
+  border-bottom: 0.5pt solid #666;
+  min-width: 40mm;
+}
+
+/* 12-Lead Grid */
+.print-12-lead-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: 0;
+  margin-bottom: 3mm;
+}
+
+.print-lead-box {
+  position: relative;
+  border: 0.5pt solid #000;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.print-lead-label {
+  position: absolute;
+  top: 1mm;
+  left: 1mm;
+  font-size: 7pt;
+  font-weight: 600;
+  background: white;
+  padding: 0 1mm;
+  z-index: 10;
+}
+
+.print-canvas-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: white;
+}
+
+/* Rhythm Strip */
+.print-rhythm-strip {
+  position: relative;
+  border: 0.5pt solid #000;
+  margin-bottom: 3mm;
+  overflow: hidden;
+}
+
+/* Footer */
+.print-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  font-size: 9pt;
+}
+
+.calibration-box {
+  display: flex;
+  align-items: center;
+  gap: 2mm;
+}
+
+.calibration-pulse {
+  border: 0.5pt solid #000;
+  background: white;
+}
+
+.interpretation-area {
+  flex: 1;
+  margin-left: 10mm;
+}
+
+.interpretation-label {
+  font-weight: 600;
+  margin-bottom: 2mm;
+}
+
+.interpretation-lines .line {
+  margin-bottom: 3mm;
+  color: #666;
+}
+
+/* Print-specific styles */
+@media print {
+  .print-view {
+    position: static;
+    overflow: visible;
+  }
+  
+  .print-page {
+    margin: 0;
+    padding: 10mm;
+    page-break-after: always;
+    page-break-inside: avoid;
+  }
+  
+  /* Force exact canvas dimensions */
+  .print-canvas-container canvas {
+    width: auto !important;
+    height: auto !important;
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: crisp-edges;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  
+  /* Ensure borders print correctly */
+  .print-lead-box,
+  .print-rhythm-strip {
+    border: 0.5pt solid #000 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  
+  /* Force exact grid colors */
+  :root {
+    --ecg-grid-color: #ffc9c9 !important;
+    --ecg-grid-bold-color: #ff9999 !important;
+    --ecg-trace-color: #000000 !important;
+  }
+}
+
+/* Screen preview styles */
+@media screen {
+  .print-page {
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+    margin: 20px auto;
+  }
+}
