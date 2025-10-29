@@ -10,7 +10,8 @@
     "build:core": "npm run build --workspace=@open-ecg-generator/core",
     "build:app": "npm run build --workspace=@open-ecg-generator/app",
     "preview": "npm run preview --workspace=@open-ecg-generator/app",
-    "clean": "npm run clean --workspaces"
+    "clean": "npm run clean --workspaces",
+    "deploy": "node deploy-gh-pages.js"
   },
   "workspaces": [
     "packages/*"

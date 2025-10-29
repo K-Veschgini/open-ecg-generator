@@ -12,10 +12,10 @@ interface PrintViewProps {
 const PrintView: React.FC<PrintViewProps> = ({ ecgData, settings }) => {
   // A4 print dimensions in mm
   const pageWidthMm = 210
-  const pageHeightMm = 297
+  // const pageHeightMm = 297
   const marginMm = 10
   const printableWidthMm = pageWidthMm - (2 * marginMm)
-  const printableHeightMm = pageHeightMm - (2 * marginMm)
+  // const printableHeightMm = pageHeightMm - (2 * marginMm)
   
   // Pixels per mm for print (higher resolution for better quality)
   const pixelsPerMm = 12 // ~300 DPI
@@ -93,7 +93,7 @@ const PrintView: React.FC<PrintViewProps> = ({ ecgData, settings }) => {
 
         {/* 12-Lead ECG Grid */}
         <div className="print-12-lead-grid">
-          {leads12.map((lead, index) => (
+          {leads12.map((lead) => (
             <div 
               key={lead} 
               className="print-lead-box"
