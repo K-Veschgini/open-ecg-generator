@@ -68,16 +68,22 @@ try {
     execSync('git checkout --orphan gh-pages', { stdio: 'inherit' });
   }
   
-  // Step 4: Clean gh-pages branch
+  // Step 4: Clean gh-pages branch completely
   console.log('🧹 Cleaning gh-pages branch...');
-  execSync('git rm -rf . || true', { stdio: 'pipe' });
+  execSync('git rm -rf .', { stdio: 'pipe' });
   
-  // Step 5: Copy build files
+  // Remove any remaining files (except .git)
+  execSync('find . -maxdepth 1 ! -name .git ! -name . -exec rm -rf {} + 2>/dev/null || true', { stdio: 'pipe' });
+  
+  // Step 5: Copy ONLY build files from dist
   console.log('📋 Copying build files...');
   cpSync(TEMP_DIR, __dirname, { recursive: true });
   
   // Add .nojekyll to prevent Jekyll processing
   execSync('touch .nojekyll');
+  
+  console.log('✅ gh-pages branch now contains only:');
+  execSync('ls -la', { stdio: 'inherit' });
   
   // Step 6: Commit and push
   console.log('💾 Committing changes...');
