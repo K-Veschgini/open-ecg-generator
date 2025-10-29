@@ -22,6 +22,12 @@ const CalibrationPulse: React.FC<CalibrationPulseProps> = ({
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
+    // Handle high-DPI displays
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = width * dpr
+    canvas.height = height * dpr
+    ctx.scale(dpr, dpr)
+
     // Clear
     ctx.clearRect(0, 0, width, height)
 
@@ -55,9 +61,9 @@ const CalibrationPulse: React.FC<CalibrationPulseProps> = ({
   return (
     <canvas
       ref={canvasRef}
-      width={width}
-      height={height}
       style={{
+        width: `${width}px`,
+        height: `${height}px`,
         position: 'absolute',
         top: 0,
         left: 0,

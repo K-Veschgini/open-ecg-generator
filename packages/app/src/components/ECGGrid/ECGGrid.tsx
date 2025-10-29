@@ -17,6 +17,12 @@ const ECGGrid: React.FC<ECGGridProps> = ({ width, height, pixelsPerMm }) => {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
+    // Handle high-DPI displays
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = width * dpr
+    canvas.height = height * dpr
+    ctx.scale(dpr, dpr)
+
     // Clear canvas with ECG paper background
     const bgColor = getComputedStyle(document.documentElement)
       .getPropertyValue('--ecg-background') || '#fffafa'
@@ -77,8 +83,7 @@ const ECGGrid: React.FC<ECGGridProps> = ({ width, height, pixelsPerMm }) => {
   return (
     <canvas
       ref={canvasRef}
-      width={width}
-      height={height}
+      style={{ width: `${width}px`, height: `${height}px` }}
       className="ecg-grid-canvas"
     />
   )

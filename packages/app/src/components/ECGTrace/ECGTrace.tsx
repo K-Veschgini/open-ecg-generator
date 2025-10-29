@@ -33,6 +33,12 @@ const ECGTrace: React.FC<ECGTraceProps> = ({
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
+    // Handle high-DPI displays
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = width * dpr
+    canvas.height = height * dpr
+    ctx.scale(dpr, dpr)
+
     // Clear canvas
     ctx.clearRect(0, 0, width, height)
     
@@ -122,8 +128,7 @@ const ECGTrace: React.FC<ECGTraceProps> = ({
   return (
     <canvas
       ref={canvasRef}
-      width={width}
-      height={height}
+      style={{ width: `${width}px`, height: `${height}px` }}
       className="ecg-trace-canvas"
     />
   )
