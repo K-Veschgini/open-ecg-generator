@@ -69,3 +69,22 @@
   padding: 3px 6px;
   font-size: 0.7rem;
 }
+
+.param-input.invalid {
+  border-color: #dc2626;
+  outline-color: #dc2626;
+}
+
+.param-error {
+  font-size: 0.65rem;
+  color: #dc2626;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+
+.wave-params-note {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  margin: 0 0 var(--spacing-sm) 0;
+  line-height: 1.4;
+}

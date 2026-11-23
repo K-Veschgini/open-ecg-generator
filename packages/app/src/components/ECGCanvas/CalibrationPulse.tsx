@@ -1,75 +1,58 @@
 import React, { useEffect, useRef } from 'react'
+import { Paper, boxStyle, cssPxToMm, setupCanvas } from '../../paper'
 
 interface CalibrationPulseProps {
-  width: number
-  height: number
-  pixelsPerMm: number
+  widthMm: number
+  heightMm: number
+  /** Isoelectric line, mm from the top (same as the traces in the row). */
+  baselineMm: number
+  mmPerSecond: number
   mmPerMv: number
+  paper: Paper
+  style?: React.CSSProperties
 }
 
+/** Standard 1 mV x 200 ms calibration pulse at the current gain and speed. */
 const CalibrationPulse: React.FC<CalibrationPulseProps> = ({
-  width,
-  height,
-  pixelsPerMm,
-  mmPerMv
+  widthMm,
+  heightMm,
+  baselineMm,
+  mmPerSecond,
+  mmPerMv,
+  paper,
+  style
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-
-    const ctx = canvas.getContext('2d')
+    const ctx = setupCanvas(canvas, paper, widthMm, heightMm)
     if (!ctx) return
 
-    // Handle high-DPI displays
-    const dpr = window.devicePixelRatio || 1
-    canvas.width = width * dpr
-    canvas.height = height * dpr
-    ctx.scale(dpr, dpr)
-
-    // Clear
-    ctx.clearRect(0, 0, width, height)
-
-    // Standard 1mV calibration pulse
-    const pulseX = 2 * pixelsPerMm // 2mm from left
-    const pulseHeight = mmPerMv * pixelsPerMm // 1mV at current gain
-    const pulseWidth = 5 * pixelsPerMm // 5mm wide (0.2 seconds at 25mm/s)
-    
-    // Position baseline lower when gain is high to prevent clipping
-    // Leave 10% margin at top and ensure pulse fits
-    const baselineY = Math.min(height * 0.7, height - pulseHeight - height * 0.1)
+    const x0 = 2
+    const pulseWidth = 0.2 * mmPerSecond
+    const top = baselineMm - mmPerMv
 
     ctx.strokeStyle = '#000000'
-    ctx.lineWidth = 1.2
-    ctx.lineCap = 'square'
+    ctx.lineWidth = cssPxToMm(paper, 1.2)
+    ctx.lineCap = 'butt'
     ctx.lineJoin = 'miter'
-
     ctx.beginPath()
-    // Baseline before pulse
-    ctx.moveTo(0, baselineY)
-    ctx.lineTo(pulseX, baselineY)
-    // Vertical up
-    ctx.lineTo(pulseX, baselineY - pulseHeight)
-    // Horizontal top
-    ctx.lineTo(pulseX + pulseWidth, baselineY - pulseHeight)
-    // Vertical down
-    ctx.lineTo(pulseX + pulseWidth, baselineY)
+    ctx.moveTo(0, baselineMm)
+    ctx.lineTo(x0, baselineMm)
+    ctx.lineTo(x0, top)
+    ctx.lineTo(x0 + pulseWidth, top)
+    ctx.lineTo(x0 + pulseWidth, baselineMm)
+    ctx.lineTo(widthMm, baselineMm)
     ctx.stroke()
-  }, [width, height, pixelsPerMm, mmPerMv])
+  }, [widthMm, heightMm, baselineMm, mmPerSecond, mmPerMv, paper])
 
   return (
     <canvas
       ref={canvasRef}
-      style={{
-        width: `${width}px`,
-        height: `${height}px`,
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        zIndex: 3,
-        pointerEvents: 'none'
-      }}
+      style={{ ...boxStyle(paper, widthMm, heightMm), ...style }}
+      className="ecg-trace-canvas"
     />
   )
 }

@@ -1,389 +1,297 @@
-import { 
-  generateECGSyn, 
-  DEFAULT_ECGSYN_PARAMS, 
+import {
   ECGSynParameters,
-  PATHOLOGY_PARAMS 
-} from './models/ecgsyn';
-import { ENHANCED_PATHOLOGY_PARAMS } from './models/ecgsyn-enhanced';
+  PathologyType,
+  PATHOLOGY_TYPES,
+  WaveParameters,
+  validateHeartRate,
+  validateParams,
+  validateSamplingRate,
+} from './models/types.js';
+import { getPathologyParams } from './models/pathologies.js';
+import { ECGSynth, RenderResult } from './models/synth.js';
+import { LeadName, STANDARD_LEADS, deriveLimbLead, isLeadName, requiredBaseLeads } from './models/leads.js';
+import { NoiseOptions, validateNoise } from './models/noise.js';
+import { RandomSource, RandomStreams, gaussian } from './math/random.js';
+
+export type { PathologyType } from './models/types.js';
+export type { NoiseOptions } from './models/noise.js';
+export type { LeadName } from './models/leads.js';
 
 /**
- * Supported pathological conditions
- */
-export type PathologyType = 
-  | 'normal'
-  | 'atrialFibrillation'
-  | 'firstDegreeAVBlock'
-  | 'ventricularTachycardia'
-  | 'stemi'
-  | 'bradycardia'
-  | 'tachycardia'
-  | 'completeHeartBlock'
-  | 'lbbb'
-  | 'rbbb'
-  | 'hyperkalemia'
-  | 'hypokalemia'
-  | 'lvh'
-  | 'pericarditis';
-
-/**
- * Noise types that can be added to ECG
- */
-export interface NoiseOptions {
-  baseline?: {
-    amplitude: number;  // mV
-    frequency: number;  // Hz
-  };
-  powerline?: {
-    amplitude: number;  // mV
-    frequency: 50 | 60;  // Hz
-  };
-  muscle?: {
-    amplitude: number;  // mV
-  };
-  gaussian?: {
-    amplitude: number;  // mV (standard deviation)
-  };
-}
-
-/**
- * Options for ECG generation
+ * Options for ECG generation.
+ *
+ * Parameter precedence: preset(pathology) -> `heartRate` (overrides the
+ * preset's typical rate when given) -> `variation` (random jitter of the
+ * resolved preset waves) -> `customParams` (only the fields provided).
  */
 export interface ECGGeneratorOptions {
+  /** Hz, >= 250 (default: the generator's sampling rate) */
   samplingRate?: number;
+  /** seconds, > 0 (default 10; for streams: undefined or Infinity = endless) */
   duration?: number;
+  /** mean ventricular rate in bpm, 20..300 (default: the pathology's typical rate) */
   heartRate?: number;
   pathology?: PathologyType;
   noise?: NoiseOptions;
   customParams?: Partial<ECGSynParameters>;
-  solverTolerance?: number;  // ODE solver tolerance (default: 1e-6, lower = more accurate)
+  /** ODE solver tolerance (absolute and relative; default 1e-6, lower = more accurate) */
+  solverTolerance?: number;
+  /**
+   * 0..1 (default 0): "biological" variation. Jitters the resolved preset
+   * wave amplitudes (+-15 %·v SD), widths (+-10 %·v) and positions once per
+   * generation, and adds heart-rate variability to sinus rhythms.
+   */
+  variation?: number;
+  /** Makes all randomness (variation, noise, AF RR intervals, f-waves) reproducible. */
+  seed?: number;
 }
 
-/**
- * Result of ECG generation
- */
+/** Result of ECG generation (one lead). */
 export interface ECGResult {
+  /** time[i] = i / samplingRate (for streams: global sample index / samplingRate) */
   time: number[];
+  /** mV */
   signal: number[];
   samplingRate: number;
   metadata: {
     duration: number;
+    /** actual mean ventricular rate of the generated beats (bpm) */
     heartRate: number;
     pathology: PathologyType;
     noise: NoiseOptions | undefined;
   };
 }
 
+const WAVE_KEYS = ['P', 'Q', 'R', 'S', 'T'] as const;
+
+interface ResolvedOptions {
+  samplingRate: number;
+  duration: number | undefined;
+  pathology: PathologyType;
+  noise: NoiseOptions | undefined;
+  tolerance: number;
+  variation: number;
+  streams: RandomStreams;
+  params: ECGSynParameters;
+}
+
+function clampedGaussian(rng: RandomSource): number {
+  return Math.max(-2, Math.min(2, gaussian(rng)));
+}
+
+function jitterWave(w: WaveParameters, v: number, rng: RandomSource, moveCenter: boolean): WaveParameters {
+  const a = clampedGaussian(rng), b = clampedGaussian(rng), c = clampedGaussian(rng);
+  return {
+    amplitude: w.amplitude * (1 + 0.15 * v * a),
+    width: w.width * Math.exp(0.1 * v * b),
+    position: moveCenter ? w.position + 0.04 * v * c : w.position,
+  };
+}
+
+/** Apply random biological variation (0..1) to a resolved parameter set (returns a copy). */
+function applyVariation(p: ECGSynParameters, v: number, rng: RandomSource): ECGSynParameters {
+  const out: ECGSynParameters = {
+    ...p,
+    P: jitterWave(p.P, v, rng, true),
+    Q: jitterWave(p.Q, v, rng, true),
+    R: jitterWave(p.R, v, rng, false),
+    S: jitterWave(p.S, v, rng, true),
+    T: jitterWave(p.T, v, rng, true),
+  };
+  if (p.extraWaves) out.extraWaves = p.extraWaves.map(w => jitterWave(w, v, rng, true));
+  return out;
+}
+
+function applyCustom(p: ECGSynParameters, custom: Partial<ECGSynParameters>): ECGSynParameters {
+  const out: ECGSynParameters = { ...p };
+  for (const k of WAVE_KEYS) {
+    const w = custom[k];
+    if (w !== undefined) out[k] = { ...p[k], ...w };
+  }
+  if (custom.heartRate !== undefined) out.heartRate = custom.heartRate;
+  if (custom.respiratoryRate !== undefined) out.respiratoryRate = custom.respiratoryRate;
+  if (custom.respiratoryAmplitude !== undefined) out.respiratoryAmplitude = custom.respiratoryAmplitude;
+  if (custom.extraWaves !== undefined) {
+    if (!Array.isArray(custom.extraWaves)) throw new Error('Invalid customParams: extraWaves must be an array');
+    out.extraWaves = custom.extraWaves.map(w => ({ ...w }));
+  }
+  return out;
+}
+
 /**
- * High-level ECG generator class
+ * High-level ECG generator.
  */
 export class ECGGenerator {
   private samplingRate: number;
-  
+
   constructor(samplingRate: number = 1000) {
-    if (samplingRate < 250) {
-      throw new Error('Sampling rate must be at least 250 Hz for ECG generation');
-    }
+    validateSamplingRate(samplingRate);
     this.samplingRate = samplingRate;
   }
-  
+
+  /** @param streaming  true for generateStream: undefined or Infinity duration means endless */
+  private resolve(options: ECGGeneratorOptions, streaming: boolean): ResolvedOptions {
+    if (options === null || typeof options !== 'object') throw new Error('ECG options must be an object');
+    const samplingRate = options.samplingRate ?? this.samplingRate;
+    validateSamplingRate(samplingRate);
+    let duration = options.duration;
+    if (streaming && duration === Infinity) duration = undefined;
+    if (duration === undefined && !streaming) duration = 10;
+    if (duration !== undefined && (!Number.isFinite(duration) || duration <= 0)) {
+      throw new Error(`Invalid duration: must be a finite number > 0 seconds (got ${duration})`);
+    }
+    const pathology = options.pathology ?? 'normal';
+    if (!(PATHOLOGY_TYPES as readonly string[]).includes(pathology)) {
+      throw new Error(`Unknown pathology "${pathology}". Supported: ${PATHOLOGY_TYPES.join(', ')}`);
+    }
+    if (options.heartRate !== undefined) validateHeartRate(options.heartRate);
+    const tolerance = options.solverTolerance ?? 1e-6;
+    if (!Number.isFinite(tolerance) || tolerance <= 0) {
+      throw new Error(`Invalid solverTolerance: must be a finite number > 0 (got ${tolerance})`);
+    }
+    const variation = options.variation ?? 0;
+    if (!Number.isFinite(variation) || variation < 0 || variation > 1) {
+      throw new Error(`Invalid variation: must be a number between 0 and 1 (got ${variation})`);
+    }
+    validateNoise(options.noise, samplingRate);
+    const streams = new RandomStreams(options.seed);
+
+    let params = getPathologyParams(pathology, options.heartRate);
+    if (variation > 0) params = applyVariation(params, variation, streams.stream('variation'));
+    if (options.customParams !== undefined) {
+      if (options.customParams === null || typeof options.customParams !== 'object') {
+        throw new Error('Invalid customParams: expected an object');
+      }
+      params = applyCustom(params, options.customParams);
+    }
+    validateParams(params);
+    return { samplingRate, duration, pathology, noise: options.noise, tolerance, variation, streams, params };
+  }
+
   /**
-   * Generate ECG signal with specified options
+   * The fully resolved model parameters `generate(options)` would use
+   * (preset -> heartRate -> variation -> customParams). Pass a `seed` to get
+   * the same variation as a subsequent generate call with that seed.
+   */
+  resolveParams(options: ECGGeneratorOptions = {}): ECGSynParameters {
+    return this.resolve(options, false).params;
+  }
+
+  private createSynth(r: ResolvedOptions, leads: readonly LeadName[]): ECGSynth {
+    return new ECGSynth({
+      params: r.params,
+      pathology: r.pathology,
+      samplingRate: r.samplingRate,
+      tolerance: r.tolerance,
+      leads: requiredBaseLeads(leads),
+      noise: r.noise,
+      variation: r.variation,
+      streams: r.streams,
+    });
+  }
+
+  private toResults(
+    r: ResolvedOptions,
+    rendered: RenderResult,
+    leads: readonly LeadName[],
+    duration: number
+  ): { [lead: string]: ECGResult } {
+    const base = rendered.leads;
+    const out: { [lead: string]: ECGResult } = {};
+    const metadata = {
+      duration,
+      heartRate: rendered.meanHeartRate,
+      pathology: r.pathology,
+      noise: r.noise,
+    };
+    leads.forEach((lead, i) => {
+      let signal: number[];
+      if (lead === 'III' || lead === 'aVR' || lead === 'aVL' || lead === 'aVF') {
+        signal = deriveLimbLead(lead, base.get('I') as number[], base.get('II') as number[]);
+      } else {
+        signal = base.get(lead) as number[];
+      }
+      out[lead] = {
+        // every lead gets its own time array, so mutating one never affects another
+        time: i === 0 ? rendered.time : rendered.time.slice(),
+        signal,
+        samplingRate: r.samplingRate,
+        metadata: { ...metadata },
+      };
+    });
+    return out;
+  }
+
+  /**
+   * Generate a lead-II ECG.
    */
   generate(options: ECGGeneratorOptions = {}): ECGResult {
-    const {
-      duration = 10,
-      heartRate = 60,
-      pathology = 'normal',
-      noise,
-      customParams,
-      samplingRate = this.samplingRate,
-      solverTolerance = 1e-6
-    } = options;
-    
-    // Get base parameters
-    let params = { ...DEFAULT_ECGSYN_PARAMS, heartRate };
-    
-    // Apply pathology modifications - use enhanced parameters
-    if (pathology !== 'normal') {
-      // Try enhanced parameters first, fall back to basic if not found
-      const enhancedPathology = ENHANCED_PATHOLOGY_PARAMS[pathology as keyof typeof ENHANCED_PATHOLOGY_PARAMS];
-      if (enhancedPathology) {
-        params = enhancedPathology(params);
-      } else if ((PATHOLOGY_PARAMS as any)[pathology]) {
-        params = (PATHOLOGY_PARAMS as any)[pathology](params);
-      }
-    }
-    
-    // Apply custom parameters
-    if (customParams) {
-      params = { ...params, ...customParams };
-    }
-    
-    // Generate clean ECG with adaptive RK45 solver
-    let { time, ecg } = generateECGSyn(duration, samplingRate, params, solverTolerance);
-    
-    // Apply pathology-specific post-processing
-    if (pathology === 'stemi') {
-      // Add ST elevation as a separate component
-      ecg = this.addSTElevation(ecg, time);
-    } else if (pathology === 'hypokalemia') {
-      // Add U waves
-      ecg = this.addUWaves(ecg, time, params.heartRate);
-    } else if (pathology === 'atrialFibrillation') {
-      // Add fibrillatory baseline and make irregular
-      ecg = this.addFibrillatoryWaves(ecg, time);
-      const result = this.makeIrregular(time, ecg, params.heartRate);
-      time = result.time;
-      ecg = result.signal;
-    } else if (pathology === 'completeHeartBlock') {
-      // Handle dissociated P waves and QRS complexes
-      ecg = this.simulateAVDissociation(ecg);
-    }
-    
-    // Apply noise if specified
-    if (noise) {
-      ecg = this.addNoise(ecg, time, noise);
-    }
-    
-    return {
-      time,
-      signal: ecg,
-      samplingRate,
-      metadata: {
-        duration,
-        heartRate: params.heartRate,
-        pathology,
-        noise
-      }
-    };
+    const r = this.resolve(options, false);
+    const duration = r.duration as number;
+    const synth = this.createSynth(r, ['II']);
+    const rendered = synth.render(Math.round(duration * r.samplingRate));
+    return this.toResults(r, rendered, ['II'], duration)['II'];
   }
-  
+
   /**
-   * Generate multiple leads from single lead
+   * Generate several leads of the same recording (same rhythm and beat
+   * timing). Leads I, II and V1-V6 are synthesised with lead-specific wave
+   * amplitudes; III, aVR, aVL and aVF are derived exactly
+   * (III = II - I, aVR = -(I + II)/2, aVL = I - II/2, aVF = II - I/2).
+   * Noise is independent per lead (limb-lead noise follows the same identities).
    */
   generateMultiLead(
     options: ECGGeneratorOptions = {},
-    leads: string[] = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF']
+    leads: string[] = [...STANDARD_LEADS]
   ): { [lead: string]: ECGResult } {
-    // Generate base signal (Lead II)
-    const leadII = this.generate(options);
-    
-    // Lead transformations (simplified)
-    const leadTransforms: { [key: string]: (signal: number[]) => number[] } = {
-      'I': (signal) => signal.map(v => v * 0.8),
-      'II': (signal) => signal,
-      'III': (signal) => signal.map(v => v * 0.6),
-      'aVR': (signal) => signal.map(v => -v * 0.5),
-      'aVL': (signal) => signal.map(v => v * 0.4),
-      'aVF': (signal) => signal.map(v => v * 0.7),
-      'V1': (signal) => signal.map(v => v * 0.3),
-      'V2': (signal) => signal.map(v => v * 0.5),
-      'V3': (signal) => signal.map(v => v * 0.8),
-      'V4': (signal) => signal.map(v => v * 1.0),
-      'V5': (signal) => signal.map(v => v * 0.9),
-      'V6': (signal) => signal.map(v => v * 0.7),
-    };
-    
-    const result: { [lead: string]: ECGResult } = {};
-    
-    for (const lead of leads) {
-      const transform = leadTransforms[lead] || ((s) => s);
-      result[lead] = {
-        ...leadII,
-        signal: transform(leadII.signal),
-      };
+    if (!Array.isArray(leads) || leads.length === 0) {
+      throw new Error('generateMultiLead: leads must be a non-empty array of lead names');
     }
-    
-    return result;
+    for (const l of leads) {
+      if (!isLeadName(l)) {
+        throw new Error(`Unknown lead "${l}". Supported: ${STANDARD_LEADS.join(', ')}`);
+      }
+    }
+    const leadNames = leads as LeadName[];
+    const r = this.resolve(options, false);
+    const duration = r.duration as number;
+    const synth = this.createSynth(r, leadNames);
+    const rendered = synth.render(Math.round(duration * r.samplingRate));
+    return this.toResults(r, rendered, leadNames, duration);
   }
-  
+
   /**
-   * Add various types of noise to ECG signal
+   * Continuous stream of lead-II ECG chunks of `chunkDuration` seconds.
+   * Model state, rhythm and noise carry across chunks, so the concatenation
+   * of chunks is one seamless recording; chunk k starts at global sample
+   * round(k * chunkDuration * fs) and time values never overlap.
+   * With `options.duration` undefined (or Infinity) the stream is endless.
+   * Options are validated eagerly: invalid input throws from this call, not
+   * from the first `next()`.
    */
-  private addNoise(signal: number[], time: number[], noise: NoiseOptions): number[] {
-    let noisySignal = [...signal];
-    
-    // Baseline wander
-    if (noise.baseline) {
-      const { amplitude, frequency } = noise.baseline;
-      for (let i = 0; i < signal.length; i++) {
-        noisySignal[i] += amplitude * Math.sin(2 * Math.PI * frequency * time[i]);
-      }
-    }
-    
-    // Powerline interference
-    if (noise.powerline) {
-      const { amplitude, frequency } = noise.powerline;
-      for (let i = 0; i < signal.length; i++) {
-        noisySignal[i] += amplitude * Math.sin(2 * Math.PI * frequency * time[i]);
-      }
-    }
-    
-    // Muscle artifacts (band-limited noise)
-    if (noise.muscle) {
-      const { amplitude } = noise.muscle;
-      for (let i = 0; i < signal.length; i++) {
-        // Simple high-frequency noise simulation
-        noisySignal[i] += amplitude * (Math.random() - 0.5) * 
-          Math.sin(2 * Math.PI * (20 + Math.random() * 30) * time[i]);
-      }
-    }
-    
-    // Gaussian white noise
-    if (noise.gaussian) {
-      const { amplitude } = noise.gaussian;
-      for (let i = 0; i < signal.length; i++) {
-        // Box-Muller transform for Gaussian distribution
-        const u1 = Math.random();
-        const u2 = Math.random();
-        const gaussian = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-        noisySignal[i] += amplitude * gaussian;
-      }
-    }
-    
-    return noisySignal;
-  }
-  
-  /**
-   * Make rhythm irregular (for AFib simulation)
-   */
-  private makeIrregular(
-    time: number[], 
-    signal: number[], 
-    baseHeartRate: number
-  ): { time: number[]; signal: number[] } {
-    const avgRR = 60 / baseHeartRate; // seconds
-    const newTime: number[] = [];
-    const newSignal: number[] = [];
-    
-    let currentTime = 0;
-    let sourceIndex = 0;
-    
-    while (currentTime < time[time.length - 1] && sourceIndex < signal.length - 1) {
-      // Random RR interval (0.4 to 1.5 times average)
-      const rrInterval = avgRR * (0.4 + Math.random() * 1.1);
-      
-      // Find the portion of signal to copy
-      const startTime = currentTime;
-      const endTime = currentTime + rrInterval;
-      
-      // Copy signal segment
-      while (sourceIndex < time.length && time[sourceIndex] < endTime) {
-        const adjustedTime = startTime + (time[sourceIndex] % avgRR);
-        if (adjustedTime <= time[time.length - 1]) {
-          newTime.push(adjustedTime);
-          newSignal.push(signal[sourceIndex]);
-        }
-        sourceIndex++;
-      }
-      
-      currentTime = endTime;
-      
-      // Reset source index to beginning of a beat
-      sourceIndex = Math.floor(sourceIndex / (avgRR * this.samplingRate)) * 
-                   Math.floor(avgRR * this.samplingRate);
-    }
-    
-    return { time: newTime, signal: newSignal };
-  }
-  
-  /**
-   * Add ST elevation for STEMI
-   */
-  private addSTElevation(signal: number[], time: number[]): number[] {
-    const result = [...signal];
-    const beatDuration = 60 / 70; // Approximate beat duration
-    
-    for (let i = 0; i < signal.length; i++) {
-      const t = time[i] % beatDuration;
-      // ST segment is approximately 0.35-0.44 of the cardiac cycle
-      if (t > 0.35 * beatDuration && t < 0.44 * beatDuration) {
-        // Add elevation that peaks at 0.3 mV
-        const stPhase = (t - 0.35 * beatDuration) / (0.09 * beatDuration);
-        result[i] += 0.3 * Math.exp(-Math.pow(stPhase - 0.5, 2) * 10);
-      }
-    }
-    
-    return result;
-  }
-  
-  /**
-   * Add U waves for hypokalemia
-   */
-  private addUWaves(signal: number[], time: number[], heartRate: number): number[] {
-    const result = [...signal];
-    const beatDuration = 60 / heartRate;
-    
-    for (let i = 0; i < signal.length; i++) {
-      const t = time[i] % beatDuration;
-      // U wave appears after T wave, around 0.65-0.8 of cardiac cycle
-      if (t > 0.65 * beatDuration && t < 0.8 * beatDuration) {
-        const uPhase = (t - 0.65 * beatDuration) / (0.15 * beatDuration);
-        result[i] += 0.15 * Math.exp(-Math.pow(uPhase - 0.5, 2) / 0.05);
-      }
-    }
-    
-    return result;
-  }
-  
-  /**
-   * Add fibrillatory waves for atrial fibrillation
-   */
-  private addFibrillatoryWaves(signal: number[], time: number[]): number[] {
-    const result = [...signal];
-    
-    // Add multiple frequency components between 350-600 Hz (coarse AFib)
-    for (let i = 0; i < signal.length; i++) {
-      let fibWave = 0;
-      for (let freq = 350; freq <= 600; freq += 50) {
-        fibWave += 0.02 * Math.sin(2 * Math.PI * freq * time[i] + Math.random() * 2 * Math.PI);
-      }
-      result[i] += fibWave;
-    }
-    
-    return result;
-  }
-  
-  /**
-   * Simulate AV dissociation for complete heart block
-   */
-  private simulateAVDissociation(signal: number[]): number[] {
-    // This is a simplified simulation
-    // In reality, P waves would continue at their own rate
-    // while QRS complexes occur at a slower, independent rate
-    return signal; // TODO: Implement proper AV dissociation
-  }
-  
-  /**
-   * Generate continuous stream of ECG data
-   */
-  *generateStream(
+  generateStream(
     options: ECGGeneratorOptions = {},
     chunkDuration: number = 1
   ): Generator<ECGResult, void, unknown> {
-    const totalDuration = options.duration || Infinity;
-    let generatedDuration = 0;
-    
-    while (generatedDuration < totalDuration) {
-      const remainingDuration = totalDuration - generatedDuration;
-      const currentChunkDuration = Math.min(chunkDuration, remainingDuration);
-      
-      const chunk = this.generate({
-        ...options,
-        duration: currentChunkDuration
-      });
-      
-      // Adjust time values
-      chunk.time = chunk.time.map(t => t + generatedDuration);
-      
-      yield chunk;
-      
-      generatedDuration += currentChunkDuration;
-      
-      if (!isFinite(totalDuration)) {
-        // For infinite streams, continue indefinitely
-        continue;
-      }
+    if (typeof chunkDuration !== 'number' || !Number.isFinite(chunkDuration) || chunkDuration <= 0) {
+      throw new Error(`Invalid chunkDuration: must be a finite number > 0 seconds (got ${chunkDuration})`);
+    }
+    const r = this.resolve(options, true);
+    const synth = this.createSynth(r, ['II']);
+    return this.streamChunks(r, synth, chunkDuration);
+  }
+
+  private *streamChunks(r: ResolvedOptions, synth: ECGSynth, chunkDuration: number): Generator<ECGResult, void, unknown> {
+    const fs = r.samplingRate;
+    const total = r.duration === undefined ? Infinity : Math.round(r.duration * fs);
+    let emitted = 0;
+    for (let k = 0; emitted < total; k++) {
+      const end = Math.min(total, Math.round((k + 1) * chunkDuration * fs));
+      const n = end - emitted;
+      if (n <= 0) continue;
+      const rendered = synth.render(n);
+      emitted = end;
+      yield this.toResults(r, rendered, ['II'], n / fs)['II'];
     }
   }
 }

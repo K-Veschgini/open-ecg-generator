@@ -1,35 +1,52 @@
 // Main exports
-export { ECGGenerator } from './ECGGenerator';
-export type { 
-  ECGGeneratorOptions, 
-  ECGResult, 
+export { ECGGenerator } from './ECGGenerator.js';
+export type {
+  ECGGeneratorOptions,
+  ECGResult,
   PathologyType,
-  NoiseOptions 
-} from './ECGGenerator';
+  NoiseOptions,
+  LeadName
+} from './ECGGenerator.js';
 
 // Model exports
-export { 
+export {
   generateECGSyn,
   DEFAULT_ECGSYN_PARAMS,
-  PATHOLOGY_PARAMS
-} from './models/ecgsyn';
-export type { 
-  ECGSynParameters, 
-  WaveParameters 
-} from './models/ecgsyn';
+  PATHOLOGY_PARAMS,
+  getPathologyParams,
+  PATHOLOGY_DEFAULT_HEART_RATE
+} from './models/ecgsyn.js';
+export type {
+  ECGSynParameters,
+  WaveParameters
+} from './models/ecgsyn.js';
+export { PATHOLOGY_TYPES, waveMs } from './models/types.js';
+export { STANDARD_LEADS } from './models/leads.js';
 
-// Enhanced pathology exports
-export { ENHANCED_PATHOLOGY_PARAMS } from './models/ecgsyn-enhanced';
+// Enhanced pathology exports (alias of PATHOLOGY_PARAMS, kept for compatibility)
+export { ENHANCED_PATHOLOGY_PARAMS } from './models/ecgsyn-enhanced.js';
+
+// Optional physiological refinements
+export {
+  HRVGenerator,
+  QTCorrection,
+  LeadMorphology,
+  ArtifactGenerator,
+  DemographicAdjustments,
+  PathologyProgression,
+  ExerciseResponse
+} from './enhancements/realistic-features.js';
+export type { HRVParams, DemographicParams } from './enhancements/realistic-features.js';
 
 // Utility exports for advanced users
-export { solveODE, interpolate } from './math/ode-solver';
-export type { ODEFunction, ODESolverOptions } from './math/ode-solver';
+export { solveODE, interpolate } from './math/ode-solver.js';
+export type { ODEFunction, ODESolverOptions, ODESolution } from './math/ode-solver.js';
 
-// Re-export commonly used functions for convenience
-import { ECGGenerator } from './ECGGenerator';
+import { ECGGenerator } from './ECGGenerator.js';
+import type { PathologyType } from './ECGGenerator.js';
 
 /**
- * Quick function to generate a normal ECG
+ * Quick function to generate a normal ECG (lead II)
  */
 export function generateNormalECG(
   duration: number = 10,
@@ -42,10 +59,10 @@ export function generateNormalECG(
 }
 
 /**
- * Quick function to generate ECG with pathology
+ * Quick function to generate ECG with pathology (lead II, preset heart rate)
  */
 export function generatePathologicalECG(
-  pathology: import('./ECGGenerator').PathologyType,
+  pathology: PathologyType,
   duration: number = 10,
   samplingRate: number = 1000
 ): { time: number[]; signal: number[] } {

@@ -26,6 +26,7 @@
 
 .viewer-section {
   min-height: 600px;
+  min-width: 0; /* let wide ECG pages scroll inside the viewer instead of widening the grid */
 }
 
 .loading-placeholder {

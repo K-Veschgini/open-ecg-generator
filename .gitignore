@@ -1,9 +1,10 @@
 # Dependencies
 node_modules/
-package-lock.json
 
 # Build outputs
 dist/
+.vite/
+.gh-pages-temp/
 *.tsbuildinfo
 
 # Environment
