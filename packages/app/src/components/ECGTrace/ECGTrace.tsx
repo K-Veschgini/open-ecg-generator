@@ -1,134 +1,79 @@
 import React, { useEffect, useRef } from 'react'
+import { Paper, boxStyle, cssPxToMm, setupCanvas } from '../../paper'
 import './ECGTrace.css'
 
 interface ECGTraceProps {
-  data: number[]
-  width: number
-  height: number
-  pixelsPerMm: number
+  /** Signal in mV, sample i at time i / samplingRate. */
+  data: readonly number[]
+  samplingRate: number
+  /** Seconds of the signal shown at the left edge. */
+  startTime: number
+  /** Seconds shown; the box is exactly duration * mmPerSecond wide. */
+  duration: number
   mmPerSecond: number
   mmPerMv: number
-  samplingRate: number
-  duration?: number
+  heightMm: number
+  /** Isoelectric (0 mV) line, mm from the top. */
+  baselineMm: number
+  paper: Paper
+  style?: React.CSSProperties
 }
 
+/**
+ * Draws an ECG segment at true calibration: x = (t - startTime) * mmPerSecond,
+ * y = baseline - v * mmPerMv. Never rescales; excursions beyond the box are
+ * clipped. Every sample in the window is drawn, at device-pixel resolution.
+ */
 const ECGTrace: React.FC<ECGTraceProps> = ({
   data,
-  width,
-  height,
-  pixelsPerMm,
+  samplingRate,
+  startTime,
+  duration,
   mmPerSecond,
   mmPerMv,
-  samplingRate,
-  duration
+  heightMm,
+  baselineMm,
+  paper,
+  style
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const widthMm = duration * mmPerSecond
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas || !data || data.length === 0) {
-      return
-    }
+    if (!canvas) return
+    // Always clear first so stale traces never survive an empty data set.
+    const ctx = setupCanvas(canvas, paper, widthMm, heightMm)
+    if (!ctx || data.length === 0 || !(samplingRate > 0)) return
 
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    const first = Math.max(0, Math.floor(startTime * samplingRate))
+    const last = Math.min(data.length - 1, Math.ceil((startTime + duration) * samplingRate))
+    if (last < first) return
 
-    // Handle high-DPI displays
-    const dpr = window.devicePixelRatio || 1
-    canvas.width = width * dpr
-    canvas.height = height * dpr
-    ctx.scale(dpr, dpr)
+    ctx.beginPath()
+    ctx.rect(0, 0, widthMm, heightMm)
+    ctx.clip()
 
-    // Clear canvas
-    ctx.clearRect(0, 0, width, height)
-    
-
-    // Calculate scaling factors
-    const pixelsPerSecond = mmPerSecond * pixelsPerMm
-    const pixelsPerMv = mmPerMv * pixelsPerMm
-    const samplesPerPixel = samplingRate / pixelsPerSecond
-    
-    // Calculate baseline (mean of signal) to center the trace properly
-    const mean = data.reduce((sum, val) => sum + val, 0) / data.length
-    const centeredData = data.map(val => val - mean)
-    
-    // Determine how many samples we'll actually display
-    const maxSamples = duration 
-      ? Math.min(centeredData.length, duration * samplingRate)
-      : centeredData.length
-    
-    // Get only the data that will be displayed
-    const displayData = centeredData.slice(0, maxSamples)
-    
-    // Calculate peak-to-peak amplitude for DISPLAYED portion only
-    const minVoltage = Math.min(...displayData)
-    const maxVoltage = Math.max(...displayData)
-    
-    // Calculate actual required space for top and bottom peaks from centerline
-    const topPeak = Math.abs(maxVoltage) * pixelsPerMv
-    const bottomPeak = Math.abs(minVoltage) * pixelsPerMv
-    const maxPeak = Math.max(topPeak, bottomPeak)
-    
-    // Center line (0 mV baseline)
-    const centerY = height / 2
-    
-    // Available space from center to edge (with 15% margin for safety)
-    const availableFromCenter = (height / 2) * 0.85
-    
-    // Auto-scale only if peaks would exceed available space
-    const effectivePixelsPerMv = maxPeak > availableFromCenter
-      ? pixelsPerMv * (availableFromCenter / maxPeak)
-      : pixelsPerMv
-
-    // Set up drawing style for clean ECG trace
-    ctx.strokeStyle = '#000000' // Black for clear visibility
-    ctx.lineWidth = 1.2 // Slightly thicker for better visibility while still professional
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--ecg-trace-color').trim() || '#000000'
+    ctx.lineWidth = cssPxToMm(paper, 1.2)
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
-    ctx.imageSmoothingEnabled = true
-    ctx.imageSmoothingQuality = 'high'
-    
-    const maxPixels = Math.min(width, maxSamples / samplesPerPixel)
 
-    // Begin drawing path
     ctx.beginPath()
-    
-    let prevX = 0
-    let prevY = centerY
-
-    
-    // Draw ECG trace
-    for (let pixel = 0; pixel < maxPixels; pixel++) {
-      const sampleIndex = Math.floor(pixel * samplesPerPixel)
-      if (sampleIndex >= maxSamples) break
-
-      const x = pixel
-      const voltage = centeredData[sampleIndex] || 0
-      const y = centerY - (voltage * effectivePixelsPerMv)
-
-      if (pixel === 0) {
-        ctx.moveTo(x, y)
-      } else {
-        // Simple line for cleaner appearance
-        ctx.lineTo(x, y)
-      }
-
-      prevX = x
-      prevY = y
+    for (let i = first; i <= last; i++) {
+      const v = data[i]
+      const x = (i / samplingRate - startTime) * mmPerSecond
+      const y = baselineMm - (Number.isFinite(v) ? v : 0) * mmPerMv
+      if (i === first) ctx.moveTo(x, y)
+      else ctx.lineTo(x, y)
     }
-
-    // Complete the path to the last point
-    if (prevX < maxPixels - 1) {
-      ctx.lineTo(prevX, prevY)
-    }
-
     ctx.stroke()
-  }, [data, width, height, pixelsPerMm, mmPerSecond, mmPerMv, samplingRate, duration])
+  }, [data, samplingRate, startTime, duration, mmPerSecond, mmPerMv, widthMm, heightMm, baselineMm, paper])
 
   return (
     <canvas
       ref={canvasRef}
-      style={{ width: `${width}px`, height: `${height}px` }}
+      style={{ ...boxStyle(paper, widthMm, heightMm), ...style }}
       className="ecg-trace-canvas"
     />
   )

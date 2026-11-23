@@ -63,8 +63,8 @@ body {
   
   /* A4 page setup */
   @page {
-    size: A4 portrait;
-    margin: 10mm;
+    size: A4 landscape;
+    margin: 0;
   }
   
   /* Ensure ECG grid prints with correct dimensions */

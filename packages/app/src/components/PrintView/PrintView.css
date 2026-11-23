@@ -1,37 +1,55 @@
-/* Print View Styles */
+/* Print View: one A4 landscape page laid out in real millimetres */
 .print-view {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: white;
+  inset: 0;
+  background: #f3f4f6;
   z-index: 9999;
   overflow: auto;
 }
 
+.print-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  background: var(--surface, #fff);
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.print-toolbar-hint {
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+}
+
 .print-page {
-  width: 210mm;
-  height: 297mm;
-  margin: 0 auto;
+  width: 297mm;
+  height: 210mm;
   padding: 10mm;
+  margin: 20px auto;
   background: white;
   box-sizing: border-box;
   position: relative;
+  overflow: hidden;
+  color: #000;
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
 }
 
-/* Header Section */
 .print-header {
-  margin-bottom: 5mm;
+  margin-bottom: 2mm;
   border-bottom: 0.5pt solid #000;
-  padding-bottom: 3mm;
+  padding-bottom: 2mm;
 }
 
 .header-info {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 10mm;
-  font-size: 9pt;
+  grid-template-columns: 1.3fr 1fr 1.2fr;
+  gap: 6mm;
+  font-size: 8.5pt;
 }
 
 .info-row {
@@ -42,134 +60,69 @@
 .info-row .label {
   font-weight: 600;
   margin-right: 2mm;
+  white-space: nowrap;
 }
 
 .info-row .value {
   flex: 1;
-  border-bottom: 0.5pt solid #666;
-  min-width: 40mm;
+  border-bottom: 0.5pt solid #999;
 }
 
-/* 12-Lead Grid */
-.print-12-lead-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  grid-template-rows: repeat(3, 1fr);
-  gap: 0;
-  margin-bottom: 3mm;
+.print-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5mm;
 }
 
-.print-lead-box {
-  position: relative;
+.print-view .ecg-row {
   border: 0.5pt solid #000;
-  overflow: hidden;
-  box-sizing: border-box;
+  border-radius: 0;
 }
 
-.print-lead-label {
-  position: absolute;
-  top: 1mm;
-  left: 1mm;
+.print-view .ecg-lead-label {
+  top: 0.8mm;
   font-size: 7pt;
-  font-weight: 600;
-  background: white;
   padding: 0 1mm;
-  z-index: 10;
+  box-shadow: none;
+  background: rgba(255, 255, 255, 0.9);
 }
 
-.print-canvas-container {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  background: white;
+.print-view .ecg-segment-tick {
+  border-left-width: 0.4mm;
 }
 
-/* Rhythm Strip */
-.print-rhythm-strip {
-  position: relative;
-  border: 0.5pt solid #000;
-  margin-bottom: 3mm;
-  overflow: hidden;
-}
-
-/* Footer */
 .print-footer {
+  margin-top: auto;
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  font-size: 9pt;
+  font-size: 7.5pt;
+  color: #333;
 }
 
-.calibration-box {
-  display: flex;
-  align-items: center;
-  gap: 2mm;
-}
-
-.calibration-pulse {
-  border: 0.5pt solid #000;
-  background: white;
-}
-
-.interpretation-area {
-  flex: 1;
-  margin-left: 10mm;
-}
-
-.interpretation-label {
-  font-weight: 600;
-  margin-bottom: 2mm;
-}
-
-.interpretation-lines .line {
-  margin-bottom: 3mm;
-  color: #666;
-}
-
-/* Print-specific styles */
 @media print {
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    background: white;
+  }
+
   .print-view {
     position: static;
     overflow: visible;
+    background: white;
   }
-  
+
   .print-page {
     margin: 0;
-    padding: 10mm;
-    page-break-after: always;
+    box-shadow: none;
+    page-break-after: avoid;
     page-break-inside: avoid;
   }
-  
-  /* Force exact canvas dimensions */
-  .print-canvas-container canvas {
-    width: auto !important;
-    height: auto !important;
-    image-rendering: -webkit-optimize-contrast;
-    image-rendering: crisp-edges;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
-  
-  /* Ensure borders print correctly */
-  .print-lead-box,
-  .print-rhythm-strip {
-    border: 0.5pt solid #000 !important;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
-  
-  /* Force exact grid colors */
-  :root {
-    --ecg-grid-color: #ffc9c9 !important;
-    --ecg-grid-bold-color: #ff9999 !important;
-    --ecg-trace-color: #000000 !important;
-  }
-}
 
-/* Screen preview styles */
-@media screen {
-  .print-page {
-    box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
-    margin: 20px auto;
+  .print-view canvas,
+  .print-view .ecg-row {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 }

@@ -1,134 +1,159 @@
 #!/usr/bin/env node
 
 /**
- * GitHub Pages Deployment Script
- * 
- * Builds the app and deploys to gh-pages branch
- * Usage: npm run deploy
+ * GitHub Pages deployment script.
+ *
+ * Builds the app and publishes packages/app/dist to the `gh-pages` branch of
+ * the `origin` remote. Publishing happens in a throwaway git repository in the
+ * OS temp directory, so this script never switches branches and never deletes
+ * or modifies anything in your working tree (apart from the build output).
+ *
+ * Usage:
+ *   npm run deploy                 # build + publish
+ *   npm run deploy -- --dry-run    # build + prepare commit, but do not push
+ *   npm run deploy -- --skip-build # publish the existing packages/app/dist
  */
 
-import { execSync } from 'child_process';
-import { existsSync, rmSync, cpSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { spawnSync } from 'node:child_process';
+import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const ROOT = dirname(fileURLToPath(import.meta.url));
+const DIST_DIR = join(ROOT, 'packages', 'app', 'dist');
+const BRANCH = 'gh-pages';
 
-const DIST_DIR = join(__dirname, 'packages/app/dist');
-const TEMP_DIR = join(__dirname, '.gh-pages-temp');
+const args = new Set(process.argv.slice(2));
+const DRY_RUN = args.has('--dry-run');
+const SKIP_BUILD = args.has('--skip-build');
 
-console.log('🚀 Starting GitHub Pages deployment...\n');
-
-try {
-  // Step 1: Clean and build
-  console.log('📦 Building production version...');
-  execSync('npm run clean', { stdio: 'inherit' });
-  execSync('npm run build:core', { stdio: 'inherit' });
-  execSync('npm run build:app', { stdio: 'inherit' });
-  
-  if (!existsSync(DIST_DIR)) {
-    throw new Error('Build failed - dist directory not found');
+for (const arg of args) {
+  if (!['--dry-run', '--skip-build'].includes(arg)) {
+    console.error(`Unknown argument: ${arg}\nUsage: node deploy-gh-pages.js [--dry-run] [--skip-build]`);
+    process.exit(2);
   }
-  
-  console.log('✅ Build completed\n');
-  
-  // Step 2: Prepare gh-pages content
-  console.log('📁 Preparing gh-pages branch...');
-  
-  // Get current branch
-  const currentBranch = execSync('git branch --show-current').toString().trim();
-  console.log(`Current branch: ${currentBranch}`);
-  
-  // Check for uncommitted changes
-  const status = execSync('git status --porcelain').toString();
-  if (status) {
-    console.log('⚠️  Warning: You have uncommitted changes. Proceeding anyway...\n');
-  }
-  
-  // Create temp directory
-  if (existsSync(TEMP_DIR)) {
-    rmSync(TEMP_DIR, { recursive: true, force: true });
-  }
-  mkdirSync(TEMP_DIR);
-  
-  // Copy dist files to temp
-  cpSync(DIST_DIR, TEMP_DIR, { recursive: true });
-  console.log('✅ Files copied to temp directory\n');
-  
-  // Step 3: Switch to gh-pages branch
-  console.log('🌿 Switching to gh-pages branch...');
-  
-  try {
-    // Try to checkout existing gh-pages branch
-    execSync('git checkout gh-pages', { stdio: 'pipe' });
-  } catch (e) {
-    // Create new orphan branch if it doesn't exist
-    console.log('Creating new gh-pages branch...');
-    execSync('git checkout --orphan gh-pages', { stdio: 'inherit' });
-  }
-  
-  // Step 4: Clean gh-pages branch completely
-  console.log('🧹 Cleaning gh-pages branch...');
-  execSync('git rm -rf .', { stdio: 'pipe' });
-  
-  // Remove any remaining files (except .git)
-  execSync('find . -maxdepth 1 ! -name .git ! -name . -exec rm -rf {} + 2>/dev/null || true', { stdio: 'pipe' });
-  
-  // Step 5: Copy ONLY build files from dist
-  console.log('📋 Copying build files...');
-  cpSync(TEMP_DIR, __dirname, { recursive: true });
-  
-  // Add .nojekyll to prevent Jekyll processing
-  execSync('touch .nojekyll');
-  
-  console.log('✅ gh-pages branch now contains only:');
-  execSync('ls -la', { stdio: 'inherit' });
-  
-  // Step 6: Commit and push
-  console.log('💾 Committing changes...');
-  execSync('git add -A');
-  
-  try {
-    execSync('git commit -m "Deploy to GitHub Pages"', { stdio: 'inherit' });
-    
-    console.log('\n📤 Pushing to gh-pages branch...');
-    execSync('git push origin gh-pages --force', { stdio: 'inherit' });
-    
-    console.log('\n✅ Deployment successful!');
-    console.log('\n🌐 Your site will be available at:');
-    console.log('   https://username.github.io/open-ecg-generator/');
-    console.log('\nNote: Replace "username" with your GitHub username');
-  } catch (e) {
-    console.log('No changes to deploy or push failed');
-  }
-  
-  // Step 7: Return to original branch
-  console.log(`\n↩️  Returning to ${currentBranch} branch...`);
-  execSync(`git checkout ${currentBranch}`, { stdio: 'inherit' });
-  
-  // Cleanup
-  if (existsSync(TEMP_DIR)) {
-    rmSync(TEMP_DIR, { recursive: true, force: true });
-  }
-  
-  console.log('\n🎉 Done!\n');
-  
-} catch (error) {
-  console.error('\n❌ Deployment failed:', error.message);
-  
-  // Try to return to original branch
-  try {
-    execSync('git checkout main || git checkout master', { stdio: 'pipe' });
-  } catch (e) {
-    // Ignore
-  }
-  
-  // Cleanup
-  if (existsSync(TEMP_DIR)) {
-    rmSync(TEMP_DIR, { recursive: true, force: true });
-  }
-  
-  process.exit(1);
 }
 
+/** Strip userinfo (user:token@) from any URLs in a string so credentials never reach logs. */
+function redact(text) {
+  return String(text).replace(/([a-z][a-z0-9+.-]*:\/\/)[^@/\s]+@/gi, '$1');
+}
+
+/** Run a command; throw on spawn error or non-zero exit. Returns trimmed stdout when capture=true. */
+function run(cmd, cmdArgs, { cwd = ROOT, capture = false, allowFail = false } = {}) {
+  const result = spawnSync(cmd, cmdArgs, {
+    cwd,
+    stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
+    encoding: 'utf8',
+    shell: process.platform === 'win32' && cmd === 'npm',
+  });
+  if (result.error) {
+    throw new Error(redact(`Failed to run "${cmd} ${cmdArgs.join(' ')}": ${result.error.message}`));
+  }
+  if (result.status !== 0) {
+    if (allowFail) return null;
+    const detail = capture && result.stderr ? `\n${result.stderr.trim()}` : '';
+    throw new Error(redact(`"${cmd} ${cmdArgs.join(' ')}" exited with code ${result.status}${detail}`));
+  }
+  return capture ? result.stdout.trim() : '';
+}
+
+/** Resolve the origin URL; relative local paths are resolved against the repo root. */
+function getOriginUrl() {
+  const url = run('git', ['remote', 'get-url', 'origin'], { capture: true, allowFail: true });
+  if (!url) {
+    throw new Error('No "origin" remote configured; cannot determine where to publish.');
+  }
+  const looksRemote = /^[a-z][a-z0-9+.-]*:\/\//i.test(url) || /^[^/\\]+@[^:]+:/.test(url);
+  if (!looksRemote && !isAbsolute(url) && existsSync(resolve(ROOT, url))) {
+    return resolve(ROOT, url);
+  }
+  return url;
+}
+
+/** Derive https://<owner>.github.io/<repo>/ from a GitHub remote URL, or null. */
+function getPagesUrl(remoteUrl) {
+  const match = remoteUrl.match(/github\.com[:/]+([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
+  if (!match) return null;
+  const owner = match[1];
+  const repo = match[2];
+  const host = `${owner.toLowerCase()}.github.io`;
+  return repo.toLowerCase() === host ? `https://${host}/` : `https://${host}/${repo}/`;
+}
+
+/** Commit identity for the temp repo: reuse the project's git config, fall back to a generic one. */
+function getIdentity() {
+  const name = run('git', ['config', 'user.name'], { capture: true, allowFail: true }) || 'gh-pages deploy';
+  const email =
+    run('git', ['config', 'user.email'], { capture: true, allowFail: true }) || 'gh-pages-deploy@users.noreply.github.com';
+  return { name, email };
+}
+
+function main() {
+  console.log(`Starting GitHub Pages deployment${DRY_RUN ? ' (dry run, nothing will be pushed)' : ''}...\n`);
+
+  const originUrl = getOriginUrl();
+  const pagesUrl = getPagesUrl(originUrl);
+  const sourceSha = run('git', ['rev-parse', '--short', 'HEAD'], { capture: true, allowFail: true }) || 'unknown';
+  const dirty = run('git', ['status', '--porcelain'], { capture: true, allowFail: true });
+
+  // Step 1: build (core first, then app, via the root "build" script).
+  if (SKIP_BUILD) {
+    console.log('Skipping build (--skip-build); using existing packages/app/dist\n');
+  } else {
+    console.log('Building production version...');
+    run('npm', ['run', 'build']);
+    console.log('Build completed\n');
+  }
+
+  if (!existsSync(DIST_DIR) || !statSync(DIST_DIR).isDirectory() || readdirSync(DIST_DIR).length === 0) {
+    throw new Error(`Build output not found or empty: ${DIST_DIR}`);
+  }
+
+  // Step 2: assemble the site in a separate temporary repository.
+  const tempDir = mkdtempSync(join(tmpdir(), 'open-ecg-gh-pages-'));
+  try {
+    console.log(`Preparing ${BRANCH} commit in ${tempDir}`);
+    cpSync(DIST_DIR, tempDir, { recursive: true });
+    writeFileSync(join(tempDir, '.nojekyll'), '');
+
+    const { name, email } = getIdentity();
+    const git = (gitArgs, opts = {}) => run('git', gitArgs, { cwd: tempDir, ...opts });
+
+    git(['init', '--quiet']);
+    git(['checkout', '--quiet', '-b', BRANCH]);
+    git(['config', 'user.name', name]);
+    git(['config', 'user.email', email]);
+    git(['config', 'commit.gpgsign', 'false']);
+    git(['add', '--all']);
+    const message = `Deploy to GitHub Pages from ${sourceSha}${dirty ? ' (with uncommitted changes)' : ''}`;
+    git(['commit', '--quiet', '-m', message]);
+    console.log('Files in commit:');
+    console.log(git(['ls-files'], { capture: true }).replace(/^/gm, '  '));
+
+    // Step 3: force-push to origin's gh-pages branch.
+    if (DRY_RUN) {
+      console.log(`\nDry run: would force-push to ${BRANCH} on ${redact(originUrl)}`);
+    } else {
+      console.log(`\nPushing to ${BRANCH} on ${redact(originUrl)}...`);
+      git(['push', '--force', originUrl, `HEAD:refs/heads/${BRANCH}`]);
+      console.log('\nDeployment successful!');
+    }
+
+    if (pagesUrl) {
+      console.log(`\nSite URL: ${pagesUrl}`);
+    } else {
+      console.log('\nOrigin is not a GitHub remote; could not derive the Pages URL.');
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+try {
+  main();
+} catch (error) {
+  console.error(`\nDeployment failed: ${redact(error.message)}`);
+  process.exit(1);
+}

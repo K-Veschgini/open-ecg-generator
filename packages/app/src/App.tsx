@@ -1,240 +1,162 @@
-import { useState, useEffect, useRef } from 'react'
-import { ECGGenerator, PathologyType, type ECGSynParameters } from '@open-ecg-generator/core'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  ECGGenerator,
+  STANDARD_LEADS,
+  type ECGGeneratorOptions,
+  type ECGResult,
+  type ECGSynParameters,
+  type LeadName
+} from '@open-ecg-generator/core'
 import html2canvas from 'html2canvas'
 import Layout from './components/Layout/Layout'
 import ECGViewer from './components/ECGCanvas/ECGViewer'
 import Controls from './components/Controls/Controls'
 import PrintView from './components/PrintView/PrintView'
+import {
+  GENERATOR_SAMPLING_RATE,
+  buildGeneratorOptions,
+  randomSeed,
+  type ECGData,
+  type ECGSettings
+} from './types'
 import './styles/App.css'
 
-export interface ECGSettings {
-  pathology: PathologyType | 'custom'
-  heartRate: number
-  paperSpeed: 25 | 50 // mm/s
-  gain: 5 | 10 | 20 // mm/mV
-  noiseLevel: number
-  leadSet: '12-lead' | 'rhythm' | 'single'
-  selectedLead: string
-  duration: number // seconds - only for rhythm/single lead views
-  respiratoryWander: boolean
-  respiratoryRate: number // breaths per minute
-  skipFirst5s: boolean // Skip first 5 seconds to avoid initialization artifacts
-  solverAccuracy: 'standard' | 'high' | 'ultra' // ODE solver accuracy
-  customWaveParams: ECGSynParameters | null // null = use preset, object = custom
+export type { ECGSettings } from './types'
+
+const INITIAL_SETTINGS: ECGSettings = {
+  pathology: 'normal',
+  customBase: 'normal',
+  heartRate: 70,
+  paperSpeed: 25,
+  gain: 10,
+  noiseLevel: 0.15,
+  variation: 0.3,
+  leadSet: '12-lead',
+  selectedLead: 'II',
+  duration: 10,
+  respiratoryWander: false,
+  respiratoryRate: 15,
+  solverAccuracy: 'standard',
+  customWaveParams: null
+}
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
+
+function generateAllLeads(
+  generator: ECGGenerator,
+  options: ECGGeneratorOptions,
+  pathology: ECGSettings['pathology']
+): ECGData {
+  const raw = generator.generateMultiLead(options, [...STANDARD_LEADS])
+  const leads = {} as Record<LeadName, ECGResult>
+  for (const lead of STANDARD_LEADS) {
+    const r = raw[lead]
+    if (!r) throw new Error(`Generator returned no data for lead ${lead}`)
+    leads[lead] = r
+  }
+  const ref = leads.II
+  return {
+    leads,
+    samplingRate: ref.samplingRate,
+    duration: ref.metadata.duration,
+    heartRate: ref.metadata.heartRate,
+    pathology
+  }
 }
 
 function App() {
-  const [settings, setSettings] = useState<ECGSettings>({
-    pathology: 'normal',
-    heartRate: 70,
-    paperSpeed: 25,
-    gain: 10,
-    noiseLevel: 0.0,  // Start with clean signal
-    leadSet: '12-lead',
-    selectedLead: 'II',
-    duration: 10,
-    respiratoryWander: false,
-    respiratoryRate: 15,
-    skipFirst5s: false,
-    solverAccuracy: 'high',  // Use high accuracy by default
-    customWaveParams: null  // Start with preset
-  })
-
-  const [ecgData, setEcgData] = useState<any>(null)
-  const [isPrintView, setIsPrintView] = useState(false)
-  const [regenerateTrigger, setRegenerateTrigger] = useState(0)
-  const generatorRef = useRef<ECGGenerator | null>(null)
+  const [settings, setSettings] = useState<ECGSettings>(INITIAL_SETTINGS)
+  const [seed, setSeed] = useState<number>(randomSeed)
+  const [ecgData, setEcgData] = useState<ECGData | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [isGenerating, setIsGenerating] = useState(true)
+  const [printData, setPrintData] = useState<ECGData | null>(null)
+  const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const viewerRef = useRef<HTMLDivElement>(null)
 
-  // Initialize ECG generator
-  useEffect(() => {
+  const generator = useMemo(() => new ECGGenerator(GENERATOR_SAMPLING_RATE), [])
+  const options = useMemo(() => buildGeneratorOptions(settings, seed), [settings, seed])
+
+  // Parameters the generator really uses (preset -> rate -> variation -> custom), for the parameter panel.
+  const activeParams = useMemo<ECGSynParameters | null>(() => {
     try {
-      generatorRef.current = new ECGGenerator()
-    } catch (error) {
-      console.error('Failed to initialize ECGGenerator:', error)
+      return generator.resolveParams(options)
+    } catch {
+      return null
     }
-  }, [])
+  }, [generator, options])
 
-  // Generate ECG data when settings change
+  // Generate asynchronously (debounced) so slider drags stay responsive and the busy state can render.
   useEffect(() => {
-    if (!generatorRef.current) return
-    
-    const generateECG = () => {
+    setIsGenerating(true)
+    const id = window.setTimeout(() => {
       try {
-        // Configure generator based on settings
-        // For 12-lead view, always generate 10 seconds (medical standard)
-        // For rhythm/single views, use user-specified duration
-        const baseDuration = settings.leadSet === '12-lead' ? 10 : settings.duration
-        
-        // Add extra time: 5 seconds if skipping, or 1 beat for random phase
-        const beatDuration = 60 / settings.heartRate
-        const generationDuration = settings.skipFirst5s ? baseDuration + 5 : baseDuration + beatDuration
-        
-        // Map accuracy setting to ODE solver tolerance
-        const toleranceMap = {
-          'standard': 1e-5,  // Fast, good for preview
-          'high': 1e-7,      // Recommended for medical use
-          'ultra': 1e-9      // Maximum accuracy, slower
-        }
-        
-        // Add biological variation to make each generation unique
-        // Randomize wave parameters (unless using custom params)
-        const variation = 0.3 // 30% variation for clearly visible differences
-        
-        const customParams = settings.customWaveParams || {
-          respiratoryRate: settings.respiratoryWander ? settings.respiratoryRate : 0,
-          respiratoryAmplitude: settings.respiratoryWander ? 0.01 : 0,
-          // Add subtle wave parameter variations for uniqueness
-          P: {
-            amplitude: 0.15 * (1 + (Math.random() - 0.5) * variation * 2),
-            width: 0.09 * (1 + (Math.random() - 0.5) * variation),
-            position: -Math.PI / 3 + (Math.random() - 0.5) * 0.3
-          },
-          Q: {
-            amplitude: -0.025 * (1 + (Math.random() - 0.5) * variation * 3),
-            width: 0.066 * (1 + (Math.random() - 0.5) * variation),
-            position: -Math.PI / 12 + (Math.random() - 0.5) * 0.2
-          },
-          R: {
-            amplitude: 1.6 * (1 + (Math.random() - 0.5) * variation * 1.5),
-            width: 0.11 * (1 + (Math.random() - 0.5) * variation),
-            position: 0
-          },
-          S: {
-            amplitude: -0.25 * (1 + (Math.random() - 0.5) * variation * 3),
-            width: 0.066 * (1 + (Math.random() - 0.5) * variation),
-            position: Math.PI / 12 + (Math.random() - 0.5) * 0.2
-          },
-          T: {
-            amplitude: 0.35 * (1 + (Math.random() - 0.5) * variation * 2.5),
-            width: 0.142 * (1 + (Math.random() - 0.5) * variation * 1.5),
-            position: Math.PI / 2 + (Math.random() - 0.5) * 0.4
-          }
-        }
-        
-        // Calculate random time offset to vary starting phase
-        const randomHR = settings.heartRate * (1 + (Math.random() - 0.5) * 0.03)
-        const timeToSkip = settings.skipFirst5s 
-          ? 5  // Skip full 5 seconds as requested
-          : Math.random() * (60 / randomHR)  // Skip random portion of one beat
-        
-        const config = {
-          heartRate: settings.heartRate * (1 + (Math.random() - 0.5) * 0.03), // ±1.5% HR variation
-          duration: generationDuration,
-          samplingRate: 500,
-          // Always add some noise to ensure variation
-          noise: {
-            gaussian: {
-              amplitude: Math.max(0.005, settings.noiseLevel * 0.05)  // At least 0.005 for visible variation
-            }
-          },
-          pathology: (settings.pathology === 'custom' ? 'normal' : settings.pathology) as PathologyType,
-          // Use custom params with biological variation
-          customParams: customParams,
-          // ODE solver tolerance for adaptive RK45
-          solverTolerance: toleranceMap[settings.solverAccuracy]
-        }
-        
-        console.log('Regenerating ECG - Trigger:', regenerateTrigger, 'Time offset:', timeToSkip.toFixed(3), 's')
-
-        // Generate all 12 leads
-        const allLeads = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
-        let leads = generatorRef.current!.generateMultiLead(config, allLeads)
-        
-        const samplesToSkip = Math.floor(timeToSkip * 500)
-        const processedLeads: typeof leads = {}
-        
-        for (const leadName of allLeads) {
-          if (leads[leadName]) {
-            processedLeads[leadName] = {
-              ...leads[leadName],
-              signal: leads[leadName].signal.slice(samplesToSkip),
-              time: leads[leadName].time.slice(samplesToSkip).map(t => t - timeToSkip)
-            }
-          }
-        }
-        
-        leads = processedLeads
-        
-        // Format data for components
-        const data = {
-          leads: leads,
-          samplingRate: 500
-        }
-        
-        // Debug: Check signal values
-        if (leads['II']?.signal) {
-          const signal = leads['II'].signal
-          const min = Math.min(...signal)
-          const max = Math.max(...signal)
-          const mean = signal.reduce((a, b) => a + b, 0) / signal.length
-          console.log('ECG Signal stats:', { min, max, mean, range: max - min })
-        }
-        
-        setEcgData(data)
-      } catch (error) {
-        console.error('Error generating ECG:', error)
+        setEcgData(generateAllLeads(generator, options, settings.pathology))
+        setError(null)
+      } catch (e) {
+        setEcgData(null)
+        setError(errorMessage(e))
+      } finally {
+        setIsGenerating(false)
       }
-    }
-    
-    generateECG()
-  }, [settings, regenerateTrigger])
+    }, 30)
+    return () => window.clearTimeout(id)
+  }, [generator, options, settings.pathology])
 
-  const handleRegenerate = () => {
-    setRegenerateTrigger(prev => prev + 1)
-  }
+  const handleRegenerate = () => setSeed(randomSeed())
 
   const handlePrint = () => {
-    setIsPrintView(true)
-    setTimeout(() => {
-      window.print()
-      setIsPrintView(false)
-    }, 100)
-  }
-
-  const handleExport = async (format: 'png' | 'pdf') => {
-    if (!viewerRef.current) return
-
     try {
-      if (format === 'png') {
-        // Find the actual ECG viewer element (skip the wrapper)
-        const ecgViewer = viewerRef.current.querySelector('.ecg-viewer')
-        if (!ecgViewer) return
-
-        // Capture the ECG viewer as canvas
-        const canvas = await html2canvas(ecgViewer as HTMLElement, {
-          backgroundColor: '#ffffff',
-          scale: 2, // Higher resolution
-          logging: false,
-          useCORS: true,
-          windowWidth: ecgViewer.scrollWidth,
-          windowHeight: ecgViewer.scrollHeight
-        })
-
-        // Convert to blob and download
-        canvas.toBlob((blob) => {
-          if (blob) {
-            const url = URL.createObjectURL(blob)
-            const link = document.createElement('a')
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)
-            link.download = `ECG-${settings.pathology}-${timestamp}.png`
-            link.href = url
-            link.click()
-            URL.revokeObjectURL(url)
-          }
-        })
-      } else if (format === 'pdf') {
-        // For PDF, use the browser's print-to-PDF functionality
-        handlePrint()
-      }
-    } catch (error) {
-      console.error('Error exporting ECG:', error)
-      alert('Failed to export ECG. Please try again.')
+      // The print page is always the standard 10 s 12-lead layout; same seed => same recording.
+      const data =
+        settings.leadSet === '12-lead' && ecgData && ecgData.duration >= 10
+          ? ecgData
+          : generateAllLeads(generator, buildGeneratorOptions({ ...settings, leadSet: '12-lead' }, seed), settings.pathology)
+      setStatusMessage(null)
+      setPrintData(data)
+    } catch (e) {
+      setStatusMessage(`Could not prepare print view: ${errorMessage(e)}`)
     }
   }
 
-  if (isPrintView) {
-    return <PrintView ecgData={ecgData} settings={settings} />
+  const closePrint = useCallback(() => setPrintData(null), [])
+
+  const handleExportPng = async () => {
+    const target = viewerRef.current?.querySelector<HTMLElement>('.ecg-viewer-body > *')
+    if (!target) {
+      setStatusMessage('Nothing to export yet.')
+      return
+    }
+    try {
+      setStatusMessage('Exporting PNG...')
+      const canvas = await html2canvas(target, {
+        backgroundColor: '#ffffff',
+        scale: 2,
+        logging: false,
+        useCORS: true,
+        width: target.scrollWidth,
+        height: target.scrollHeight,
+        windowWidth: Math.max(document.documentElement.clientWidth, target.scrollWidth)
+      })
+      const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve))
+      if (!blob) throw new Error('Canvas could not be encoded')
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)
+      link.download = `ECG-${settings.pathology}-${timestamp}.png`
+      link.href = url
+      link.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+      setStatusMessage('PNG exported.')
+    } catch (e) {
+      setStatusMessage(`Export failed: ${errorMessage(e)}`)
+    }
+  }
+
+  if (printData) {
+    return <PrintView ecgData={printData} settings={settings} onClose={closePrint} />
   }
 
   return (
@@ -245,24 +167,18 @@ function App() {
             <Controls
               settings={settings}
               onSettingsChange={setSettings}
-              onExport={handleExport}
+              activeParams={activeParams}
+              actualHeartRate={ecgData?.heartRate ?? null}
+              onExportPng={handleExportPng}
+              onPrint={handlePrint}
               onRegenerate={handleRegenerate}
-              isGenerating={false}
+              isGenerating={isGenerating}
+              statusMessage={statusMessage}
             />
           </div>
 
           <div className="viewer-section" ref={viewerRef}>
-            {ecgData ? (
-              <ECGViewer
-                data={ecgData}
-                settings={settings}
-                isLoading={false}
-              />
-            ) : (
-              <div className="loading-placeholder">
-                <p>Initializing ECG generator...</p>
-              </div>
-            )}
+            <ECGViewer data={ecgData} settings={settings} isLoading={isGenerating} error={error} />
           </div>
         </main>
       </div>

@@ -1,47 +1,86 @@
 import React from 'react'
-import { ECGSettings } from '../../App'
-import { DEFAULT_ECGSYN_PARAMS, PATHOLOGY_PARAMS, ENHANCED_PATHOLOGY_PARAMS } from '@open-ecg-generator/core'
+import {
+  PATHOLOGY_DEFAULT_HEART_RATE,
+  STANDARD_LEADS,
+  type ECGSynParameters,
+  type LeadName,
+  type PathologyType
+} from '@open-ecg-generator/core'
 import WaveParameterEditor from './WaveParameterEditor'
+import {
+  PATHOLOGY_LABELS,
+  PATHOLOGY_ORDER,
+  type ECGSettings,
+  type LeadSet,
+  type SolverAccuracy
+} from '../../types'
 import './Controls.css'
 
 interface ControlsProps {
   settings: ECGSettings
   onSettingsChange: (settings: ECGSettings) => void
-  onExport: (format: 'png' | 'pdf') => void
+  /** Parameters the generator actually uses for the current settings (preset or custom). */
+  activeParams: ECGSynParameters | null
+  /** Actual mean ventricular rate of the displayed recording. */
+  actualHeartRate: number | null
+  onExportPng: () => void
+  onPrint: () => void
   onRegenerate: () => void
   isGenerating: boolean
+  statusMessage: string | null
 }
 
-// Helper function to get effective parameters for a pathology
-const getPathologyParams = (pathology: string) => {
-  if (pathology === 'custom') return DEFAULT_ECGSYN_PARAMS
-  
-  let params = { ...DEFAULT_ECGSYN_PARAMS }
-  
-  // Try enhanced parameters first
-  const enhancedPathology = ENHANCED_PATHOLOGY_PARAMS[pathology as keyof typeof ENHANCED_PATHOLOGY_PARAMS]
-  if (enhancedPathology) {
-    params = enhancedPathology(params)
-  } else if ((PATHOLOGY_PARAMS as any)[pathology]) {
-    params = (PATHOLOGY_PARAMS as any)[pathology](params)
-  }
-  
-  return params
-}
+const HR_MIN = 30
+const HR_MAX = 200
 
 const Controls: React.FC<ControlsProps> = ({
   settings,
   onSettingsChange,
-  onExport,
+  activeParams,
+  actualHeartRate,
+  onExportPng,
+  onPrint,
   onRegenerate,
-  isGenerating
+  isGenerating,
+  statusMessage
 }) => {
-  const updateSetting = <K extends keyof ECGSettings>(
-    key: K,
-    value: ECGSettings[K]
-  ) => {
+  const updateSetting = <K extends keyof ECGSettings>(key: K, value: ECGSettings[K]) => {
     onSettingsChange({ ...settings, [key]: value })
   }
+  const isCustom = settings.pathology === 'custom'
+
+  const selectPathology = (value: string) => {
+    if (value === 'custom') {
+      if (isCustom) return
+      // Start editing from the parameters currently in use; keep the rhythm of the current preset.
+      onSettingsChange({
+        ...settings,
+        pathology: 'custom',
+        customBase: settings.pathology as PathologyType,
+        customWaveParams: activeParams ? structuredClone(activeParams) : null
+      })
+      return
+    }
+    const p = value as PathologyType
+    onSettingsChange({
+      ...settings,
+      pathology: p,
+      customBase: p,
+      customWaveParams: null,
+      heartRate: Math.min(HR_MAX, Math.max(HR_MIN, PATHOLOGY_DEFAULT_HEART_RATE[p]))
+    })
+  }
+
+  const editParams = (params: ECGSynParameters) => {
+    onSettingsChange({
+      ...settings,
+      pathology: 'custom',
+      customBase: isCustom ? settings.customBase : (settings.pathology as PathologyType),
+      customWaveParams: params
+    })
+  }
+
+  const actualRate = actualHeartRate !== null ? Math.round(actualHeartRate) : null
 
   return (
     <div className="controls surface">
@@ -51,64 +90,40 @@ const Controls: React.FC<ControlsProps> = ({
           className="btn btn-primary btn-regenerate"
           onClick={onRegenerate}
           disabled={isGenerating}
-          title="Generate new random variation"
+          title="Generate a new random recording (new seed)"
         >
           🔄 New
         </button>
       </div>
-      
+
       <div className="control-section">
         <h3>Pathology</h3>
         <div className="form-group">
-          <select
-            className="select"
-            value={settings.pathology}
-            onChange={(e) => {
-              const value = e.target.value
-              if (value === 'custom') {
-                // Switch to custom mode - use current params or defaults
-                const currentParams = settings.customWaveParams || { ...DEFAULT_ECGSYN_PARAMS }
-                onSettingsChange({
-                  ...settings,
-                  pathology: 'custom',
-                  customWaveParams: currentParams
-                })
-              } else {
-                // Switch to preset - clear custom params
-                onSettingsChange({
-                  ...settings,
-                  pathology: value as any,
-                  customWaveParams: null
-                })
-              }
-            }}
-          >
-            <option value="normal">Normal Sinus Rhythm</option>
-            <option value="stemi">Myocardial Infarction (STEMI)</option>
-            <option value="atrialFibrillation">Atrial Fibrillation</option>
-            <option value="ventricularTachycardia">Ventricular Tachycardia</option>
-            <option value="bradycardia">Bradycardia</option>
-            <option value="tachycardia">Tachycardia</option>
+          <select className="select" value={settings.pathology} onChange={e => selectPathology(e.target.value)}>
+            {PATHOLOGY_ORDER.map(p => (
+              <option key={p} value={p}>
+                {PATHOLOGY_LABELS[p]}
+              </option>
+            ))}
             <option value="custom">Custom Parameters</option>
           </select>
         </div>
+        {isCustom && (
+          <div className="info-note">
+            <small>Rhythm and rate behaviour of: {PATHOLOGY_LABELS[settings.customBase]}</small>
+          </div>
+        )}
 
-        {/* Advanced Wave Parameters Editor */}
-        {settings.pathology === 'custom' ? (
-          <WaveParameterEditor
-            params={settings.customWaveParams || DEFAULT_ECGSYN_PARAMS}
-            onParamsChange={(params) => onSettingsChange({ ...settings, customWaveParams: params })}
-            onReset={() => onSettingsChange({ ...settings, pathology: 'normal', customWaveParams: null })}
-            isCustom={true}
-          />
-        ) : (
-          <details className="advanced-params">
-            <summary>Show Wave Parameters</summary>
+        {activeParams && (
+          <details className="advanced-params" open={isCustom ? true : undefined}>
+            <summary>{isCustom ? 'Wave Parameters (custom)' : 'Show Wave Parameters'}</summary>
             <WaveParameterEditor
-              params={settings.customWaveParams || getPathologyParams(settings.pathology)}
-              onParamsChange={(params) => onSettingsChange({ ...settings, pathology: 'custom', customWaveParams: params })}
-              onReset={() => onSettingsChange({ ...settings, customWaveParams: null })}
-              isCustom={false}
+              params={isCustom && settings.customWaveParams ? settings.customWaveParams : activeParams}
+              onParamsChange={editParams}
+              onReset={() =>
+                onSettingsChange({ ...settings, pathology: settings.customBase, customWaveParams: null })
+              }
+              isCustom={isCustom}
             />
           </details>
         )}
@@ -121,13 +136,18 @@ const Controls: React.FC<ControlsProps> = ({
             <input
               type="range"
               className="slider"
-              min="30"
-              max="200"
+              min={HR_MIN}
+              max={HR_MAX}
               value={settings.heartRate}
-              onChange={(e) => updateSetting('heartRate', Number(e.target.value))}
+              onChange={e => updateSetting('heartRate', Number(e.target.value))}
             />
             <span className="slider-value">{settings.heartRate} bpm</span>
           </div>
+          {actualRate !== null && actualRate !== settings.heartRate && (
+            <div className="info-note" style={{ marginTop: '0.5rem' }}>
+              <small>Measured mean ventricular rate of this recording: {actualRate} bpm</small>
+            </div>
+          )}
         </div>
       </div>
 
@@ -138,40 +158,36 @@ const Controls: React.FC<ControlsProps> = ({
           <select
             className="select"
             value={settings.leadSet}
-            onChange={(e) => updateSetting('leadSet', e.target.value as any)}
+            onChange={e => updateSetting('leadSet', e.target.value as LeadSet)}
           >
-            <option value="12-lead">12-Lead ECG (10s standard)</option>
-            <option value="rhythm">Rhythm Strip</option>
+            <option value="12-lead">12-Lead ECG (10 s standard)</option>
+            <option value="rhythm">Rhythm Strip (II, V1, V5)</option>
             <option value="single">Single Lead</option>
           </select>
         </div>
-        
+
         {settings.leadSet === '12-lead' && (
           <div className="info-note">
-            <small>12-lead ECG shows 10 seconds (medical standard): 2.5s per lead + 10s rhythm strip</small>
+            <small>
+              10 s recording: each column shows the next 2.5 s (0-2.5, 2.5-5, 5-7.5, 7.5-10 s) above a continuous
+              10 s lead II rhythm strip.
+            </small>
           </div>
         )}
 
-        {(settings.leadSet === 'rhythm' || settings.leadSet === 'single') && (
+        {settings.leadSet === 'single' && (
           <div className="form-group">
             <label className="label">Lead</label>
             <select
               className="select"
               value={settings.selectedLead}
-              onChange={(e) => updateSetting('selectedLead', e.target.value)}
+              onChange={e => updateSetting('selectedLead', e.target.value as LeadName)}
             >
-              <option value="I">Lead I</option>
-              <option value="II">Lead II</option>
-              <option value="III">Lead III</option>
-              <option value="aVR">Lead aVR</option>
-              <option value="aVL">Lead aVL</option>
-              <option value="aVF">Lead aVF</option>
-              <option value="V1">Lead V1</option>
-              <option value="V2">Lead V2</option>
-              <option value="V3">Lead V3</option>
-              <option value="V4">Lead V4</option>
-              <option value="V5">Lead V5</option>
-              <option value="V6">Lead V6</option>
+              {STANDARD_LEADS.map(l => (
+                <option key={l} value={l}>
+                  Lead {l}
+                </option>
+              ))}
             </select>
           </div>
         )}
@@ -179,42 +195,30 @@ const Controls: React.FC<ControlsProps> = ({
         <div className="form-group">
           <label className="label">Paper Speed</label>
           <div className="button-group">
-            <button
-              className={`btn ${settings.paperSpeed === 25 ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => updateSetting('paperSpeed', 25)}
-            >
-              25 mm/s
-            </button>
-            <button
-              className={`btn ${settings.paperSpeed === 50 ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => updateSetting('paperSpeed', 50)}
-            >
-              50 mm/s
-            </button>
+            {([25, 50] as const).map(s => (
+              <button
+                key={s}
+                className={`btn ${settings.paperSpeed === s ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => updateSetting('paperSpeed', s)}
+              >
+                {s} mm/s
+              </button>
+            ))}
           </div>
         </div>
 
         <div className="form-group">
           <label className="label">Gain</label>
           <div className="button-group">
-            <button
-              className={`btn ${settings.gain === 5 ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => updateSetting('gain', 5)}
-            >
-              5 mm/mV
-            </button>
-            <button
-              className={`btn ${settings.gain === 10 ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => updateSetting('gain', 10)}
-            >
-              10 mm/mV
-            </button>
-            <button
-              className={`btn ${settings.gain === 20 ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => updateSetting('gain', 20)}
-            >
-              20 mm/mV
-            </button>
+            {([5, 10, 20] as const).map(g => (
+              <button
+                key={g}
+                className={`btn ${settings.gain === g ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => updateSetting('gain', g)}
+              >
+                {g} mm/mV
+              </button>
+            ))}
           </div>
         </div>
       </div>
@@ -228,12 +232,41 @@ const Controls: React.FC<ControlsProps> = ({
               type="range"
               className="slider"
               min="0"
-              max="0.2"
-              step="0.01"
+              max="1"
+              step="0.05"
               value={settings.noiseLevel}
-              onChange={(e) => updateSetting('noiseLevel', Number(e.target.value))}
+              onChange={e => updateSetting('noiseLevel', Number(e.target.value))}
             />
             <span className="slider-value">{(settings.noiseLevel * 100).toFixed(0)}%</span>
+          </div>
+          <div className="info-note" style={{ marginTop: '0.5rem' }}>
+            <small>
+              {settings.noiseLevel > 0
+                ? `Baseline wander ${(0.2 * settings.noiseLevel).toFixed(2)} mV, EMG ${(0.05 * settings.noiseLevel).toFixed(3)} mV RMS, broadband ${(0.015 * settings.noiseLevel).toFixed(3)} mV RMS, 50 Hz ${(0.02 * settings.noiseLevel).toFixed(3)} mV`
+                : 'Clean signal (no noise)'}
+            </small>
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label className="label">Biological Variation</label>
+          <div className="slider-container">
+            <input
+              type="range"
+              className="slider"
+              min="0"
+              max="1"
+              step="0.05"
+              value={settings.variation}
+              onChange={e => updateSetting('variation', Number(e.target.value))}
+            />
+            <span className="slider-value">{(settings.variation * 100).toFixed(0)}%</span>
+          </div>
+          <div className="info-note" style={{ marginTop: '0.5rem' }}>
+            <small>
+              Random wave-shape jitter (keeps the pathology's morphology) and heart-rate variability; "New" draws a new
+              random recording.{isCustom ? ' Custom wave values are used exactly.' : ''}
+            </small>
           </div>
         </div>
 
@@ -241,24 +274,8 @@ const Controls: React.FC<ControlsProps> = ({
           <label className="label checkbox-label">
             <input
               type="checkbox"
-              checked={settings.skipFirst5s}
-              onChange={(e) => updateSetting('skipFirst5s', e.target.checked)}
-            />
-            <span>Skip First 5 Seconds</span>
-          </label>
-          {settings.skipFirst5s && (
-            <div className="info-note" style={{ marginTop: '0.5rem' }}>
-              <small>Discards initial 5s to show stabilized signal only</small>
-            </div>
-          )}
-        </div>
-
-        <div className="form-group">
-          <label className="label checkbox-label">
-            <input
-              type="checkbox"
               checked={settings.respiratoryWander}
-              onChange={(e) => updateSetting('respiratoryWander', e.target.checked)}
+              onChange={e => updateSetting('respiratoryWander', e.target.checked)}
             />
             <span>Respiratory Baseline Wander</span>
           </label>
@@ -275,15 +292,28 @@ const Controls: React.FC<ControlsProps> = ({
                 max="30"
                 step="1"
                 value={settings.respiratoryRate}
-                onChange={(e) => updateSetting('respiratoryRate', Number(e.target.value))}
+                onChange={e => updateSetting('respiratoryRate', Number(e.target.value))}
               />
               <span className="slider-value">{settings.respiratoryRate} /min</span>
             </div>
           </div>
         )}
+
+        <div className="form-group">
+          <label className="label">Solver Accuracy</label>
+          <select
+            className="select"
+            value={settings.solverAccuracy}
+            onChange={e => updateSetting('solverAccuracy', e.target.value as SolverAccuracy)}
+          >
+            <option value="fast">Fast (tolerance 1e-4)</option>
+            <option value="standard">Standard (tolerance 1e-6)</option>
+            <option value="high">High (tolerance 1e-8)</option>
+          </select>
+        </div>
       </div>
 
-      {/* Duration only for rhythm/single lead views - 12-lead is always 10s (medical standard) */}
+      {/* Duration only for rhythm/single lead views - 12-lead is always 10 s */}
       {settings.leadSet !== '12-lead' && (
         <div className="control-section">
           <h3>Duration</h3>
@@ -294,8 +324,9 @@ const Controls: React.FC<ControlsProps> = ({
                 className="slider"
                 min="5"
                 max="60"
+                step="5"
                 value={settings.duration}
-                onChange={(e) => updateSetting('duration', Number(e.target.value))}
+                onChange={e => updateSetting('duration', Number(e.target.value))}
               />
               <span className="slider-value">{settings.duration}s</span>
             </div>
@@ -304,13 +335,17 @@ const Controls: React.FC<ControlsProps> = ({
       )}
 
       <div className="control-section actions">
-        <button
-          className="btn btn-primary"
-          onClick={() => onExport('png')}
-          disabled={isGenerating}
-        >
+        <button className="btn btn-primary" onClick={onExportPng} disabled={isGenerating}>
           Export PNG
         </button>
+        <button className="btn btn-secondary" onClick={onPrint} disabled={isGenerating}>
+          Print / PDF
+        </button>
+        {statusMessage && (
+          <div className="info-note" role="status" style={{ marginTop: '0.5rem' }}>
+            <small>{statusMessage}</small>
+          </div>
+        )}
       </div>
     </div>
   )
